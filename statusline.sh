@@ -1,5 +1,7 @@
 #!/bin/bash
-# Status line: model name + context usage progress bar
+# Status line: two lines
+# Line 1: dir [model] git +added/-removed
+# Line 2: context bar + duration + load
 
 input=$(cat)
 
@@ -16,12 +18,31 @@ if [ -n "$cwd" ]; then
         else
             git_info=" ⎇ ${branch}"
         fi
+        # Ahead/behind upstream
+        ab=$(git -C "$cwd" rev-list --left-right --count @{upstream}...HEAD 2>/dev/null)
+        if [ -n "$ab" ]; then
+            behind=$(echo "$ab" | awk '{print $1}')
+            ahead=$(echo "$ab" | awk '{print $2}')
+            [ "$ahead" -gt 0 ] && git_info="${git_info}↑${ahead}"
+            [ "$behind" -gt 0 ] && git_info="${git_info}↓${behind}"
+        fi
     fi
 fi
 
-# Display current directory (replace $HOME with ~)
+# Line 1: dir [model] git +/-
 dir_display="${cwd/#$HOME/\~}"
-printf "%s" "$dir_display"
+printf "%s [%s]%s" "$dir_display" "$model" "$git_info"
+
+added=$(echo "$input" | jq -r '.cost.total_lines_added // 0')
+removed=$(echo "$input" | jq -r '.cost.total_lines_removed // 0')
+if [ "$added" -gt 0 ] || [ "$removed" -gt 0 ]; then
+    printf " +%d/-%d" "$added" "$removed"
+fi
+
+# Line 2: animated pet + context bar + duration + load
+printf "\n"
+
+printf "=^.^= "
 
 if [ -n "$used" ]; then
     pct=$(printf "%.0f" "$used")
@@ -30,18 +51,18 @@ if [ -n "$used" ]; then
     bar=""
     for i in $(seq 1 $filled); do bar="${bar}█"; done
     for i in $(seq 1 $empty);  do bar="${bar}░"; done
-    printf " [%s]%s %s %d%%" "$model" "$git_info" "$bar" "$pct"
-else
-    printf " [%s]%s" "$model" "$git_info"
+    if [ "$pct" -ge 85 ]; then
+        color="\033[31m"
+    elif [ "$pct" -ge 70 ]; then
+        color="\033[33m"
+    else
+        color="\033[32m"
+    fi
+    reset="\033[0m"
+    printf "${color}%s %d%%${reset}" "$bar" "$pct"
 fi
 
-added=$(echo "$input" | jq -r '.cost.total_lines_added // 0')
-removed=$(echo "$input" | jq -r '.cost.total_lines_removed // 0')
-if [ "$added" -gt 0 ] || [ "$removed" -gt 0 ]; then
-    printf " +%d/-%d" "$added" "$removed"
-fi
-
-# Session duration from total_duration_ms
+# Session duration
 duration_ms=$(echo "$input" | jq -r '.cost.total_duration_ms // 0')
 if [ "$duration_ms" -gt 0 ]; then
     duration_s=$(( duration_ms / 1000 ))
@@ -57,6 +78,15 @@ if [ "$duration_ms" -gt 0 ]; then
     fi
 fi
 
-# System load (1min average)
-load=$(awk '{printf "%.2f", $1}' /proc/loadavg)
-printf " ⚡%s" "$load"
+# System load
+ncpu=$(sysctl -n hw.ncpu)
+load=$(sysctl -n vm.loadavg | awk '{printf "%.2f", $2}')
+load_int=$(echo "$load $ncpu" | awk '{printf "%.0f", ($1/$2)*100}')
+if [ "$load_int" -ge 100 ]; then
+    load_color="\033[31m"
+elif [ "$load_int" -ge 50 ]; then
+    load_color="\033[33m"
+else
+    load_color="\033[32m"
+fi
+printf " ${load_color}⚡%s\033[0m" "$load"
